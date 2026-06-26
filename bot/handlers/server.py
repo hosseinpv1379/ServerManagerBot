@@ -55,6 +55,68 @@ def _server_result_keyboard(server_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def _create_image_keyboard(context: ContextTypes.DEFAULT_TYPE, page: int) -> InlineKeyboardMarkup:
+    """Build paginated image selection keyboard for server creation."""
+    images_dict = context.user_data.get("create_images", {})
+    images = sorted(
+        images_dict.values(),
+        key=lambda img: (img.os_flavor or "", img.name or img.description or ""),
+    )
+    start = page * PAGE_SIZE
+    page_items = images[start : start + PAGE_SIZE]
+
+    rows: list[list] = [
+        [
+            styled_button(
+                (img.name or img.description or str(img.id))[:40],
+                f"srv:ci:{img.id}",
+                style="primary",
+            )
+        ]
+        for img in page_items
+    ]
+
+    nav: list = []
+    if page > 0:
+        nav.append(styled_button("◀ Prev", f"srv:cip:{page - 1}"))
+    if start + PAGE_SIZE < len(images):
+        nav.append(styled_button("Next ▶", f"srv:cip:{page + 1}"))
+    if nav:
+        rows.append(nav)
+
+    rows.append([styled_button("❌ Cancel", "menu", style="danger")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _create_image_text(context: ContextTypes.DEFAULT_TYPE, page: int) -> str:
+    """Build image selection header for server creation."""
+    images_dict = context.user_data.get("create_images", {})
+    total = len(images_dict)
+    start = page * PAGE_SIZE
+    end = min(start + PAGE_SIZE, total)
+    name = context.user_data.get("create_name", "")
+    return (
+        f"Selected name: <code>{name}</code>\n\n"
+        f"Choose an image ({start + 1}-{end} of {total}):"
+    )
+
+
+async def _show_create_image_page(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    page: int,
+) -> None:
+    """Show a paginated image picker during server creation."""
+    keyboard = _create_image_keyboard(context, page)
+    text = _create_image_text(context, page)
+
+    if update.callback_query:
+        await edit_callback_message(update, text, reply_markup=keyboard)
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
 async def list_servers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show paginated server list."""
     query = update.callback_query
@@ -453,22 +515,18 @@ async def create_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             return ConversationHandler.END
 
         context.user_data["create_images"] = {str(img.id): img for img in images}
-        rows = [
-            [styled_button(img.name or img.description or str(img.id), f"srv:ci:{img.id}", style="primary")]
-            for img in images[:PAGE_SIZE]
-        ]
-        if len(images) > PAGE_SIZE:
-            rows.append([styled_button("More images in Images menu", "img:0")])
-        rows.append([styled_button("❌ Cancel", "menu", style="danger")])
-        await update.message.reply_text(
-            f"Selected name: <code>{name}</code>\n\nChoose an image:",
-            reply_markup=InlineKeyboardMarkup(rows),
-            parse_mode="HTML",
-        )
+        await _show_create_image_page(update, context, page=0)
         return CREATE_IMAGE
     except Exception as exc:
         await handle_api_error(update, exc)
         return ConversationHandler.END
+
+
+async def create_image_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Paginate images during server creation."""
+    page = int(update.callback_query.data.split(":")[2])
+    await _show_create_image_page(update, context, page=page)
+    return CREATE_IMAGE
 
 
 async def create_select_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -584,7 +642,10 @@ def register_server_handlers(application: Application) -> None:
         entry_points=[CallbackQueryHandler(create_start, pattern=r"^srv:c$")],
         states={
             CREATE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_name)],
-            CREATE_IMAGE: [CallbackQueryHandler(create_select_image, pattern=r"^srv:ci:")],
+            CREATE_IMAGE: [
+                CallbackQueryHandler(create_select_image, pattern=r"^srv:ci:"),
+                CallbackQueryHandler(create_image_page, pattern=r"^srv:cip:\d+$"),
+            ],
             CREATE_LOCATION: [CallbackQueryHandler(create_select_location, pattern=r"^srv:cl:")],
             CREATE_TYPE: [CallbackQueryHandler(create_select_type, pattern=r"^srv:ct:")],
             CREATE_CONFIRM: [CallbackQueryHandler(create_confirm, pattern=r"^srv:cf$")],
