@@ -6,12 +6,11 @@ from telegram import Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from bot.config import PAGE_SIZE
+from bot.constants import OS_FAMILIES
 from bot.handlers.common import back_to_menu_keyboard, handle_api_error, paginate_keyboard, reply_or_edit
 from bot.utils.api import get_api_for_context
 from bot.utils.formatters import format_image, format_image_list
 from bot.utils.keyboards import markup, row, styled_button
-
-OS_FILTERS = ["ubuntu", "debian", "fedora", "centos", "rocky", "alma"]
 
 
 async def filter_images(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -46,19 +45,19 @@ async def _list_images_page(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         )
         filter_row = [
             styled_button(
-                f"{'✓ ' if os_filter == name else ''}{name.title()}",
-                f"img:f:{name}",
-                style="primary" if os_filter == name else None,
+                f"{'✓ ' if os_filter == key else ''}{label}",
+                f"img:f:{key}",
+                style="primary" if os_filter == key else None,
             )
-            for name in OS_FILTERS[:3]
+            for key, label in OS_FAMILIES[:3]
         ]
         filter_row2 = [
             styled_button(
-                f"{'✓ ' if os_filter == name else ''}{name.title()}",
-                f"img:f:{name}",
-                style="primary" if os_filter == name else None,
+                f"{'✓ ' if os_filter == key else ''}{label}",
+                f"img:f:{key}",
+                style="primary" if os_filter == key else None,
             )
-            for name in OS_FILTERS[3:]
+            for key, label in OS_FAMILIES[3:]
         ]
         extra_rows = [
             filter_row,

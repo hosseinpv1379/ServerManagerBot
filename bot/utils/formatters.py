@@ -138,3 +138,42 @@ def format_ssh_key_list(keys: list[SSHKey]) -> str:
     for key in keys:
         lines.append(f"• <code>{key.name}</code>")
     return "\n".join(lines)
+
+
+def _price_entry_for_location(server_type: object, location_name: str | None) -> dict | None:
+    """Return the price dict for a server type at a location."""
+    prices = getattr(server_type, "prices", None) or []
+    if location_name:
+        for entry in prices:
+            if entry.get("location") == location_name:
+                return entry
+    return prices[0] if prices else None
+
+
+def format_eur_price(server_type: object, location_name: str | None = None) -> str:
+    """Format hourly and monthly gross prices in EUR."""
+    entry = _price_entry_for_location(server_type, location_name)
+    if not entry:
+        return "—"
+    monthly = float(entry["price_monthly"]["gross"])
+    hourly = float(entry["price_hourly"]["gross"])
+    return f"<code>{monthly:.2f} €</code>/month · <code>{hourly:.4f} €</code>/hour"
+
+
+def format_eur_price_short(server_type: object, location_name: str | None = None) -> str:
+    """Short EUR price for inline buttons."""
+    entry = _price_entry_for_location(server_type, location_name)
+    if not entry:
+        return "—"
+    monthly = float(entry["price_monthly"]["gross"])
+    return f"{monthly:.2f}€/mo"
+
+
+def format_server_type_button(server_type: object, location_name: str | None = None) -> str:
+    """Build a compact server type label with EUR price for buttons."""
+    price = format_eur_price_short(server_type, location_name)
+    label = (
+        f"{server_type.name} — {server_type.cores}c/{server_type.memory}GB — {price}"
+    )
+    return label[:64]
+

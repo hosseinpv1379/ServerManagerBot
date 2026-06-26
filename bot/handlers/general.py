@@ -48,7 +48,7 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     from bot.handlers.account import list_accounts
 
     account_id = context.user_data.get("account_id")
-    for key in ("pwd_server_id", "ssh_server_id", "acc_name", "create_name", "create_image", "create_location", "create_type", "create_images", "ssh_name"):
+    for key in ("pwd_server_id", "ssh_server_id", "acc_name", "create_name", "create_os", "create_image", "create_location", "create_type", "create_images", "create_types", "ssh_name"):
         context.user_data.pop(key, None)
     context.user_data.clear()
     if account_id:

@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-from bot.config import PAGE_SIZE
+from bot.constants import OS_FAMILIES
 from bot.handlers.common import (
     back_to_menu_keyboard,
     handle_api_error,
@@ -29,7 +29,12 @@ from bot.handlers.common import (
 from bot.handlers.general import cancel_conversation
 from bot.services.server_access import install_public_key_on_server, set_custom_root_password
 from bot.utils.api import get_api_for_context
-from bot.utils.formatters import format_server, format_server_list
+from bot.utils.formatters import (
+    format_eur_price,
+    format_server,
+    format_server_list,
+    format_server_type_button,
+)
 from bot.utils.keyboards import markup, row, styled_button
 from bot.utils.ssh_client import SSHError
 from bot.utils.validators import validate_root_password, validate_server_name, validate_ssh_public_key
@@ -38,13 +43,14 @@ logger = logging.getLogger(__name__)
 
 (
     CREATE_NAME,
+    CREATE_OS,
     CREATE_IMAGE,
     CREATE_LOCATION,
     CREATE_TYPE,
     CREATE_CONFIRM,
     SET_PASSWORD,
     ADD_SSH_KEY,
-) = range(7)
+) = range(8)
 
 
 def _server_result_keyboard(server_id: int) -> InlineKeyboardMarkup:
@@ -84,8 +90,38 @@ def _create_image_keyboard(context: ContextTypes.DEFAULT_TYPE, page: int) -> Inl
     if nav:
         rows.append(nav)
 
+    rows.append([styled_button("◀ Change OS", "srv:cob")])
     rows.append([styled_button("❌ Cancel", "menu", style="danger")])
     return InlineKeyboardMarkup(rows)
+
+
+def _os_label(context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Return display label for the selected OS family."""
+    os_key = context.user_data.get("create_os", "")
+    for key, label in OS_FAMILIES:
+        if key == os_key:
+            return label
+    return os_key.title() if os_key else "—"
+
+
+async def _show_create_os_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show OS family selection before image pick."""
+    name = context.user_data.get("create_name", "")
+    rows = [
+        [styled_button(label, f"srv:cos:{key}", style="primary")]
+        for key, label in OS_FAMILIES
+    ]
+    rows.append([styled_button("❌ Cancel", "menu", style="danger")])
+    text = (
+        f"Selected name: <code>{name}</code>\n\n"
+        "<b>Choose an OS family:</b>"
+    )
+    keyboard = InlineKeyboardMarkup(rows)
+
+    if update.callback_query:
+        await edit_callback_message(update, text, reply_markup=keyboard)
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 def _create_image_text(context: ContextTypes.DEFAULT_TYPE, page: int) -> str:
@@ -95,8 +131,10 @@ def _create_image_text(context: ContextTypes.DEFAULT_TYPE, page: int) -> str:
     start = page * PAGE_SIZE
     end = min(start + PAGE_SIZE, total)
     name = context.user_data.get("create_name", "")
+    os_label = _os_label(context)
     return (
-        f"Selected name: <code>{name}</code>\n\n"
+        f"Selected name: <code>{name}</code>\n"
+        f"OS: <code>{os_label}</code>\n\n"
         f"Choose an image ({start + 1}-{end} of {total}):"
     )
 
@@ -507,12 +545,31 @@ async def create_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return CREATE_NAME
 
     context.user_data["create_name"] = name
+    await _show_create_os_panel(update, context)
+    return CREATE_OS
+
+
+async def create_select_os(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Filter images by OS family and show the image picker."""
+    os_key = update.callback_query.data.split(":")[2]
+    context.user_data["create_os"] = os_key
 
     try:
-        images = await get_api_for_context(context).get_images()
+        images = await get_api_for_context(context).get_images(os_filter=os_key)
         if not images:
-            await update.message.reply_text("No images available.", reply_markup=back_to_menu_keyboard())
-            return ConversationHandler.END
+            await edit_callback_message(
+                update,
+                f"No images found for <code>{_os_label(context)}</code>.\n"
+                "Please choose another OS family:",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [styled_button(label, f"srv:cos:{key}", style="primary") for key, label in OS_FAMILIES[:3]],
+                        [styled_button(label, f"srv:cos:{key}", style="primary") for key, label in OS_FAMILIES[3:]],
+                        [styled_button("❌ Cancel", "menu", style="danger")],
+                    ]
+                ),
+            )
+            return CREATE_OS
 
         context.user_data["create_images"] = {str(img.id): img for img in images}
         await _show_create_image_page(update, context, page=0)
@@ -520,6 +577,12 @@ async def create_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     except Exception as exc:
         await handle_api_error(update, exc)
         return ConversationHandler.END
+
+
+async def create_os_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Return to OS family selection."""
+    await _show_create_os_panel(update, context)
+    return CREATE_OS
 
 
 async def create_image_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -559,26 +622,28 @@ async def create_select_image(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def create_select_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Store selected location and show server types."""
+    """Store selected location and show server types with EUR prices."""
     location_name = update.callback_query.data.split(":")[2]
     context.user_data["create_location"] = location_name
 
     try:
         server_types = await get_api_for_context(context).get_server_types()
+        context.user_data["create_types"] = {st.name: st for st in server_types}
         rows = [
             [
                 styled_button(
-                    f"{st.name} — {st.cores}c / {st.memory}GB / {st.disk}GB",
+                    format_server_type_button(st, location_name),
                     f"srv:ct:{st.name}",
                     style="primary",
                 )
             ]
-            for st in server_types[:10]
+            for st in server_types[:12]
         ]
         rows.append([styled_button("❌ Cancel", "menu", style="danger")])
         await reply_or_edit(
             update,
-            f"Location: <code>{location_name}</code>\n\nChoose a server type:",
+            f"Location: <code>{location_name}</code>\n\n"
+            "<b>Choose a server type</b> (prices in EUR):",
             reply_markup=InlineKeyboardMarkup(rows),
         )
         return CREATE_TYPE
@@ -588,16 +653,25 @@ async def create_select_location(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def create_select_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Store server type and show confirmation."""
+    """Store server type and show confirmation with EUR price."""
     type_name = update.callback_query.data.split(":")[2]
     context.user_data["create_type"] = type_name
+    location_name = context.user_data.get("create_location", "")
+
+    types_map = context.user_data.get("create_types", {})
+    server_type = types_map.get(type_name)
+
+    price_line = format_eur_price(server_type, location_name) if server_type else "—"
+    os_label = _os_label(context)
 
     summary = (
         "<b>Confirm server creation</b>\n\n"
         f"<b>Name:</b> <code>{context.user_data['create_name']}</code>\n"
+        f"<b>OS:</b> <code>{os_label}</code>\n"
         f"<b>Image:</b> <code>{context.user_data['create_image']}</code>\n"
-        f"<b>Location:</b> <code>{context.user_data['create_location']}</code>\n"
-        f"<b>Type:</b> <code>{type_name}</code>"
+        f"<b>Location:</b> <code>{location_name}</code>\n"
+        f"<b>Type:</b> <code>{type_name}</code>\n"
+        f"<b>Price:</b> {price_line}"
     )
     keyboard = markup(
         row(
@@ -627,7 +701,15 @@ async def create_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             row(styled_button("View Server", f"srv:i:{server.id}", style="primary")),
             row(styled_button("🏠 Main Menu", "menu", style="success")),
         )
-        for key in ("create_name", "create_image", "create_location", "create_type", "create_images"):
+        for key in (
+            "create_name",
+            "create_os",
+            "create_image",
+            "create_location",
+            "create_type",
+            "create_images",
+            "create_types",
+        ):
             context.user_data.pop(key, None)
         await edit_callback_message(update, text, reply_markup=keyboard)
     except Exception as exc:
@@ -642,9 +724,11 @@ def register_server_handlers(application: Application) -> None:
         entry_points=[CallbackQueryHandler(create_start, pattern=r"^srv:c$")],
         states={
             CREATE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_name)],
+            CREATE_OS: [CallbackQueryHandler(create_select_os, pattern=r"^srv:cos:")],
             CREATE_IMAGE: [
                 CallbackQueryHandler(create_select_image, pattern=r"^srv:ci:"),
                 CallbackQueryHandler(create_image_page, pattern=r"^srv:cip:\d+$"),
+                CallbackQueryHandler(create_os_back, pattern=r"^srv:cob$"),
             ],
             CREATE_LOCATION: [CallbackQueryHandler(create_select_location, pattern=r"^srv:cl:")],
             CREATE_TYPE: [CallbackQueryHandler(create_select_type, pattern=r"^srv:ct:")],
