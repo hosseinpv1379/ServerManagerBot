@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from bot.config import ADMIN_USER_IDS, PAGE_SIZE
@@ -44,15 +45,24 @@ async def reply_or_edit(
     *,
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str = "HTML",
+    answer: bool = True,
 ) -> None:
     """Edit callback message or reply to a command/message."""
     if update.callback_query and update.callback_query.message:
-        await update.callback_query.answer()
-        await update.callback_query.message.edit_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-        )
+        if answer:
+            try:
+                await update.callback_query.answer()
+            except BadRequest:
+                pass
+        try:
+            await update.callback_query.message.edit_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+        except BadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                raise
         return
     if update.effective_message:
         await update.effective_message.reply_text(
@@ -62,10 +72,32 @@ async def reply_or_edit(
         )
 
 
-async def handle_api_error(update: Update, exc: Exception) -> None:
+async def edit_callback_message(
+    update: Update,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str = "HTML",
+) -> None:
+    """Edit the callback message without answering the query (for long operations)."""
+    await reply_or_edit(
+        update,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        answer=False,
+    )
+
+
+async def handle_api_error(
+    update: Update,
+    exc: Exception,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
     """Show a user-friendly API error."""
     message = str(exc) if isinstance(exc, HetznerAPIError) else "Something went wrong. Please try again."
-    await reply_or_edit(update, f"⚠️ {message}")
+    await edit_callback_message(update, f"⚠️ {message}", reply_markup=reply_markup)
 
 
 def paginate_keyboard(

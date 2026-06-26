@@ -22,6 +22,7 @@ from bot.handlers.common import (
     is_admin,
     main_menu_keyboard,
     paginate_keyboard,
+    edit_callback_message,
     reply_or_edit,
     server_actions_keyboard,
 )
@@ -118,7 +119,7 @@ async def server_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await api.power_off_server(server)
 
         server = await api.get_server(server_id)
-        await reply_or_edit(
+        await edit_callback_message(
             update,
             f"✅ Action completed.\n\n{format_server(server)}",
             reply_markup=markup(
@@ -279,7 +280,8 @@ async def add_ssh_key_from_hetzner(update: Update, context: ContextTypes.DEFAULT
 
         await reply_or_edit(
             update,
-            f"⏳ Installing Hetzner key <code>{ssh_key.name}</code> on server...",
+            f"⏳ Installing Hetzner key <code>{ssh_key.name}</code> on server...\n"
+            "This may take up to a minute.",
         )
         await _install_ssh_key(
             update,
@@ -289,13 +291,13 @@ async def add_ssh_key_from_hetzner(update: Update, context: ContextTypes.DEFAULT
             key_name=ssh_key.name,
         )
     except SSHError as exc:
-        await reply_or_edit(
+        await edit_callback_message(
             update,
             f"⚠️ SSH error: {exc}",
             reply_markup=_server_result_keyboard(server_id),
         )
     except Exception as exc:
-        await handle_api_error(update, exc)
+        await handle_api_error(update, exc, reply_markup=_server_result_keyboard(server_id))
 
 
 async def _install_ssh_key(
@@ -315,7 +317,7 @@ async def _install_ssh_key(
         if status_message:
             await status_message.edit_text(text, reply_markup=back_to_menu_keyboard())
         else:
-            await reply_or_edit(update, text, reply_markup=back_to_menu_keyboard())
+            await edit_callback_message(update, text, reply_markup=back_to_menu_keyboard())
         return
 
     server, temp_password, added = await install_public_key_on_server(api, server, public_key)
@@ -335,7 +337,7 @@ async def _install_ssh_key(
     if status_message:
         await status_message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     else:
-        await reply_or_edit(update, text, reply_markup=keyboard)
+        await edit_callback_message(update, text, reply_markup=keyboard)
 
 
 async def add_ssh_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -411,13 +413,13 @@ async def server_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TY
         name = server.name
         await reply_or_edit(update, f"⏳ Deleting <code>{name}</code>...")
         await api.delete_server(server)
-        await reply_or_edit(
+        await edit_callback_message(
             update,
             f"✅ Server <code>{name}</code> deleted.",
             reply_markup=back_to_menu_keyboard(),
         )
     except Exception as exc:
-        await handle_api_error(update, exc)
+        await handle_api_error(update, exc, reply_markup=back_to_menu_keyboard())
 
 
 async def create_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -569,9 +571,9 @@ async def create_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         for key in ("create_name", "create_image", "create_location", "create_type", "create_images"):
             context.user_data.pop(key, None)
-        await reply_or_edit(update, text, reply_markup=keyboard)
+        await edit_callback_message(update, text, reply_markup=keyboard)
     except Exception as exc:
-        await handle_api_error(update, exc)
+        await handle_api_error(update, exc, reply_markup=back_to_menu_keyboard())
 
     return ConversationHandler.END
 
