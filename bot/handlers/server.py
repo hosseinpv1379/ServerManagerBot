@@ -210,31 +210,132 @@ async def set_password_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ConversationHandler.END
 
 
-async def add_ssh_key_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Begin SSH public key installation on the server."""
+async def add_ssh_key_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show Hetzner SSH keys or manual paste option."""
     server_id = int(update.callback_query.data.split(":")[2])
-    context.user_data["ssh_server_id"] = server_id
 
     try:
-        server = await get_api_for_context(context).get_server(server_id)
+        api = get_api_for_context(context)
+        server = await api.get_server(server_id)
         if not server:
             await reply_or_edit(update, "Server not found.", reply_markup=back_to_menu_keyboard())
-            return ConversationHandler.END
+            return
+
+        keys = await api.get_ssh_keys()
+        rows: list[list] = []
+
+        for key in keys:
+            rows.append(
+                [styled_button(f"🔑 {key.name}", f"srv:skk:{server_id}:{key.id}", style="primary")]
+            )
+
+        text_extra = ""
+        if not keys:
+            text_extra = (
+                "\n\nNo SSH keys in Hetzner Cloud. Paste a key manually "
+                "or add one from the SSH Keys menu."
+            )
+
+        rows.append([styled_button("✏️ Paste Public Key", f"srv:skm:{server_id}", style="success")])
+        rows.append([styled_button("❌ Cancel", f"srv:i:{server_id}", style="danger")])
 
         await reply_or_edit(
             update,
-            f"Add SSH public key to <code>{server.name}</code>\n\n"
-            "Send the public key (ssh-rsa, ssh-ed25519, or ecdsa).\n\n"
-            "The bot will:\n"
-            "1. Reset password via Hetzner API\n"
-            "2. Connect via SSH as root\n"
-            "3. Add the key to <code>/root/.ssh/authorized_keys</code>",
-            reply_markup=markup(row(styled_button("❌ Cancel", f"srv:i:{server_id}", style="danger"))),
+            f"Add SSH key to <code>{server.name}</code>\n\n"
+            "Choose a key from Hetzner Cloud or paste one manually.\n\n"
+            "The bot will reset the password via API, connect via SSH, "
+            "and add the key to <code>/root/.ssh/authorized_keys</code>."
+            f"{text_extra}",
+            reply_markup=markup(*rows),
         )
-        return ADD_SSH_KEY
     except Exception as exc:
         await handle_api_error(update, exc)
-        return ConversationHandler.END
+
+
+async def add_ssh_key_manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ask the user to paste a public key manually."""
+    server_id = int(update.callback_query.data.split(":")[2])
+    context.user_data["ssh_server_id"] = server_id
+
+    await reply_or_edit(
+        update,
+        "Send the public key (ssh-rsa, ssh-ed25519, or ecdsa):",
+        reply_markup=markup(row(styled_button("❌ Cancel", f"srv:i:{server_id}", style="danger"))),
+    )
+    return ADD_SSH_KEY
+
+
+async def add_ssh_key_from_hetzner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Install a Hetzner Cloud SSH key on the server."""
+    parts = update.callback_query.data.split(":")
+    server_id, key_id = int(parts[2]), int(parts[3])
+
+    try:
+        api = get_api_for_context(context)
+        ssh_key = await api.get_ssh_key(key_id)
+        if not ssh_key or not ssh_key.public_key:
+            await reply_or_edit(update, "SSH key not found in Hetzner Cloud.", reply_markup=back_to_menu_keyboard())
+            return
+
+        await reply_or_edit(
+            update,
+            f"⏳ Installing Hetzner key <code>{ssh_key.name}</code> on server...",
+        )
+        await _install_ssh_key(
+            update,
+            context,
+            server_id=server_id,
+            public_key=ssh_key.public_key,
+            key_name=ssh_key.name,
+        )
+    except SSHError as exc:
+        await reply_or_edit(
+            update,
+            f"⚠️ SSH error: {exc}",
+            reply_markup=_server_result_keyboard(server_id),
+        )
+    except Exception as exc:
+        await handle_api_error(update, exc)
+
+
+async def _install_ssh_key(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    server_id: int,
+    public_key: str,
+    key_name: str | None = None,
+    status_message=None,
+) -> None:
+    """Install a public key on the server and show the result."""
+    api = get_api_for_context(context)
+    server = await api.get_server(server_id)
+    if not server:
+        text = "Server not found."
+        if status_message:
+            await status_message.edit_text(text, reply_markup=back_to_menu_keyboard())
+        else:
+            await reply_or_edit(update, text, reply_markup=back_to_menu_keyboard())
+        return
+
+    server, temp_password, added = await install_public_key_on_server(api, server, public_key)
+    context.user_data.pop("ssh_server_id", None)
+
+    label = f"<code>{key_name}</code>" if key_name else "Key"
+    key_status = f"{label} added to server." if added else f"{label} was already on the server."
+    text = (
+        f"✅ {key_status}\n\n"
+        f"{format_server(server)}\n\n"
+        f"<b>Temporary root password</b> (from Hetzner reset):\n"
+        f"<code>{temp_password}</code>\n\n"
+        "You can now connect with your SSH key or this password."
+    )
+    keyboard = _server_result_keyboard(server_id)
+
+    if status_message:
+        await status_message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await reply_or_edit(update, text, reply_markup=keyboard)
 
 
 async def add_ssh_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -256,24 +357,13 @@ async def add_ssh_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
     try:
-        api = get_api_for_context(context)
-        server = await api.get_server(server_id)
-        if not server:
-            await status.edit_text("Server not found.", reply_markup=back_to_menu_keyboard())
-            return ConversationHandler.END
-
-        server, temp_password, added = await install_public_key_on_server(api, server, public_key)
-        context.user_data.pop("ssh_server_id", None)
-
-        key_status = "Key added to server." if added else "Key was already on the server."
-        text = (
-            f"✅ {key_status}\n\n"
-            f"{format_server(server)}\n\n"
-            f"<b>Temporary root password</b> (from Hetzner reset):\n"
-            f"<code>{temp_password}</code>\n\n"
-            "You can now connect with your SSH key or this password."
+        await _install_ssh_key(
+            update,
+            context,
+            server_id=server_id,
+            public_key=public_key,
+            status_message=status,
         )
-        await status.edit_text(text, reply_markup=_server_result_keyboard(server_id), parse_mode="HTML")
     except SSHError as exc:
         await status.edit_text(f"⚠️ SSH error: {exc}", reply_markup=_server_result_keyboard(server_id))
     except Exception as exc:
@@ -524,7 +614,7 @@ def register_server_handlers(application: Application) -> None:
     )
 
     add_ssh_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(add_ssh_key_start, pattern=r"^srv:sk:\d+$")],
+        entry_points=[CallbackQueryHandler(add_ssh_key_manual_start, pattern=r"^srv:skm:\d+$")],
         states={
             ADD_SSH_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_ssh_key_input)],
         },
@@ -540,6 +630,8 @@ def register_server_handlers(application: Application) -> None:
 
     application.add_handler(set_password_conv)
     application.add_handler(add_ssh_conv)
+    application.add_handler(CallbackQueryHandler(add_ssh_key_start, pattern=r"^srv:sk:\d+$"))
+    application.add_handler(CallbackQueryHandler(add_ssh_key_from_hetzner, pattern=r"^srv:skk:\d+:\d+$"))
     application.add_handler(CallbackQueryHandler(list_servers, pattern=r"^srv:\d+$"))
     application.add_handler(CallbackQueryHandler(server_info, pattern=r"^srv:i:\d+$"))
     application.add_handler(CallbackQueryHandler(server_action, pattern=r"^srv:(r|on|off):\d+$"))

@@ -22,7 +22,7 @@ from bot.utils.accounts import get_account
 HELP_TEXT = (
     "<b>Help</b>\n\n"
     "• <b>Accounts</b> — switch between multiple Hetzner API keys\n"
-    "• <b>Servers</b> — list, create, reboot, power on/off, reset password, delete\n"
+    "• <b>Servers</b> — list, create, reboot, power on/off, set password, add SSH key, delete\n"
     "• <b>Images</b> — browse OS templates and details\n"
     "• <b>Locations</b> — view datacenter locations\n"
     "• <b>SSH Keys</b> — manage SSH keys\n\n"

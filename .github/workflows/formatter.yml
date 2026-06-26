@@ -2,10 +2,10 @@ name: Code Quality Checks
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
-      - '*'
+      - main
 
 jobs:
   ruff:
@@ -19,10 +19,10 @@ jobs:
         python-version: '3.11'
     - name: Install dependencies
       run: |
-        export PIP_BREAK_SYSTEM_PACKAGES=1
         python -m pip install --upgrade pip
-        pip install uv ruff
-        uv sync
+        pip install ruff
+        pip install -r bot/requirements.txt
     - name: Run Ruff Format
-      run: |
-        ruff format --check .
+      run: ruff format --check bot main.py
+    - name: Run Ruff Lint
+      run: ruff check bot main.py
