@@ -1,0 +1,4 @@
+python-telegram-bot>=20.0,<21.0
+hcloud>=2.0
+python-dotenv>=1.0
+paramiko>=3.0
