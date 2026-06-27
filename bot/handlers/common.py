@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -13,6 +14,8 @@ from bot.config import ADMIN_USER_IDS, PAGE_SIZE
 from bot.utils.accounts import Account
 from bot.utils.api import HetznerAPIError
 from bot.utils.keyboards import markup, row, styled_button
+
+logger = logging.getLogger(__name__)
 
 WELCOME_TEXT = (
     "<b>Hetzner Cloud Manager</b>\n\n"
@@ -96,8 +99,19 @@ async def handle_api_error(
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
     """Show a user-friendly API error."""
-    message = str(exc) if isinstance(exc, HetznerAPIError) else "Something went wrong. Please try again."
-    await edit_callback_message(update, f"⚠️ {message}", reply_markup=reply_markup)
+    logger.exception("Handler error")
+    if isinstance(exc, HetznerAPIError):
+        message = str(exc)
+    elif isinstance(exc, BadRequest):
+        message = f"Telegram error: {exc.message}"
+    else:
+        message = "Something went wrong. Please try again."
+    await reply_or_edit(
+        update,
+        f"⚠️ {message}",
+        reply_markup=reply_markup or back_to_menu_keyboard(),
+        answer=False,
+    )
 
 
 def paginate_keyboard(

@@ -15,6 +15,7 @@ from telegram.ext import (
     filters,
 )
 
+from bot.config import PAGE_SIZE
 from bot.constants import OS_FAMILIES
 from bot.handlers.common import (
     back_to_menu_keyboard,
